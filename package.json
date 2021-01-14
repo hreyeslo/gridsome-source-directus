@@ -26,6 +26,7 @@
     "directus"
   ],
   "dependencies": {
-    "@directus/sdk-js": "^9.0.0-rc.28"
+    "@directus/sdk-js": "^9.0.0-rc.28",
+    "rimraf": "^3.0.2"
   }
 }

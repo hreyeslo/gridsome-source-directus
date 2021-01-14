@@ -1,6 +1,7 @@
 const DirectusSDK = require("@directus/sdk-js");
 const fs = require('fs');
 const path = require('path');
+const rimraf = require('rimraf');
 
 /**
  * Convert `const http` to variable to change protocol from project options
@@ -11,29 +12,14 @@ let http = require('https');
  */
 let uploadImagesDir = './.cache-directus/img-cache'
 
-const imageTypes = [
-  'image/jpeg',
-  'image/jpg',
-  'image/png',
-  'image/gif',
-]
-
 // TODO ADD CLEANUP OF UNUSED IMAGES / FILES
 let download = async (url, dest, dir = uploadImagesDir) => {
 
-  var imgName = dest;
-
-  if (!fs.existsSync('./.cache-directus')) {
-    fs.mkdirSync('./.cache-directus');
-  }
-
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir);
-  }
+  const imgName = dest;
 
   dest = dir + '/' + dest;
 
-  var cleanImageName = path.resolve(dest);
+  const cleanImageName = path.resolve(dest);
 
   if (fs.existsSync(dest)) return cleanImageName;
 
@@ -52,6 +38,14 @@ let download = async (url, dest, dir = uploadImagesDir) => {
     });
   });
 };
+
+function prepareAssetsFolder(dir = uploadImagesDir) {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  rimraf.sync(`${dir}/*`);
+}
 
 function sanitizeFields(fields) {
   Object.keys(fields).forEach((key) => {
@@ -106,32 +100,8 @@ function flatten(obj) {
  * End. https://stackoverflow.com/questions/34513964/how-to-convert-this-nested-object-into-a-flat-object
  * */
 
-async function checkForImages(item) {
-
-  for (const itemKey in item) {
-    const itemContent = item[itemKey];
-    if (itemContent && itemContent.type && imageTypes.includes(itemContent.type)) {
-      item[itemKey].gridsome_image = await download(itemContent.data.full_url, itemContent.filename_disk);
-    } else if (itemContent && itemKey !== 'owner' && typeof itemContent === 'object' && Object.keys(itemContent).length > 0) {
-      item[itemKey] = await checkForImages(itemContent);
-    }
-  }
-
-  return item;
-}
-
-async function checkForDownloads(item) {
-
-  for (const itemKey in item) {
-    const itemContent = item[itemKey];
-    if (itemContent && itemContent.type && itemContent.data) {
-      item[itemKey].gridsome_link = await download(itemContent.data.full_url, itemContent.filename_disk, './.cache-directus/file-cache');
-    } else if (itemContent && itemKey !== 'owner' && typeof itemContent === 'object' && Object.keys(itemContent).length > 0) {
-      item[itemKey] = await checkForDownloads(itemContent);
-    }
-  }
-
-  return item;
+function uniqueArray(array = []) {
+  return array.filter((item, pos, self) => self.indexOf(item) == pos)
 }
 
 class DirectusSource {
@@ -198,7 +168,7 @@ class DirectusSource {
       });
     }
 
-    if (email && password || staticToken) {
+    if (email && password) {
       let data = await connect();
     }
 
@@ -252,14 +222,6 @@ class DirectusSource {
 
         for (let item of data) {
 
-          if (params.downloadImages) {
-            item = await checkForImages(item);
-          }
-
-          if (params.downloadFiles) {
-            item = await checkForDownloads(item);
-          }
-
           /**
            * Convert nested object to flat object
            */
@@ -283,6 +245,29 @@ class DirectusSource {
         process.exit(1)
         throw "DIRECTUS ERROR: Can not load data for collection '" + collectionName + "'!";
       }
+    }
+
+    try {
+      let files = await client.files.read();
+      files = files.data;
+
+      const authToken = client.auth.token;
+
+      prepareAssetsFolder();
+
+      const filesDownloaded = await Promise.allSettled(files.map(async file => {
+        const { id, filename_download } = file;
+        const url = `${apiUrl}/assets/${id}?access_token=${authToken}`;
+        return await download(url, filename_download);
+      })).then(files => files.filter(file => file.status === 'fulfilled').map(file => {
+        const fileParts = file.value.split('/');
+        return fileParts[fileParts.length - 1];
+      }));
+      console.log("DIRECTUS: Assets download completed");
+      console.log(uniqueArray(filesDownloaded));
+    } catch (e) {
+      console.error("DIRECTUS ERROR: Can not download assets", e);
+      process.exit(1)
     }
 
     console.log("DIRECTUS: Loading done!");
